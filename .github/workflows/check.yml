@@ -133,7 +133,6 @@ jobs:
         body: |
           自动发布的PicaComic APK
           版本: ${{ steps.extract.outputs.version }}
-          发布时间: ${{ github.workflow_run.created_at }}
           下载链接: ${{ steps.extract.outputs.apk_link }}
         draft: false
         prerelease: false
