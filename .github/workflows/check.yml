@@ -1,0 +1,151 @@
+name: PicaComic APK Auto-Release
+
+
+permissions:
+  actions: write
+  attestations: write
+  checks: write
+  contents: write
+  deployments: write
+  discussions: write
+  issues: write
+  packages: write
+  pages: write
+  pull-requests: write
+  repository-projects: write
+  security-events: write
+  statuses: write
+
+on:
+  schedule:
+    - cron: '0 */5 * * *'  # 每5小时运行一次
+  workflow_dispatch:  # 允许手动触发
+
+jobs:
+  check-and-release:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Fetch PicaComic page
+      run: |
+        echo "正在获取 PicaComic 页面..."
+        curl -s -o pica.html "https://www.picacomic.com"
+        echo "页面已保存到 pica.html"
+        echo "文件前500个字符:"
+        head -c 500 pica.html
+        echo -e "\n\n文件大小:"
+        ls -la pica.html
+        
+    - name: Extract APK link and version
+      id: extract
+      run: |
+        echo "正在提取 APK 链接和版本号..."
+        # 输出包含.apk的行以便调试
+        echo "包含.apk的行:"
+        grep -i '\.apk' pica.html || echo "未找到.apk文件"
+        
+        # 提取第一个.apk链接
+        apk_link=$(grep -o 'href="[^"]*\.apk"' pica.html | head -1 | sed 's/href="//' | sed 's/"//')
+        echo "提取的APK链接: $apk_link"
+        
+        # 如果是相对链接，则拼接完整URL
+        if [[ $apk_link != http* ]]; then
+          apk_link="https://www.picacomic.com$apk_link"
+          echo "拼接后的完整链接: $apk_link"
+        fi
+        
+        # 提取版本号 - 多种方法尝试
+        echo "尝试提取版本号..."
+        
+        # 方法1: 从链接中提取版本号
+        version=$(echo $apk_link | grep -o 'v[0-9.]*' | head -1 | sed 's/v//')
+        echo "方法1提取的版本号: $version"
+        
+        # 方法2: 从链接文本中提取版本号
+        if [ -z "$version" ]; then
+          version=$(grep -A5 -B5 '\.apk' pica.html | grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+' | head -1)
+          echo "方法2提取的版本号: $version"
+        fi
+        
+        # 方法3: 从按钮文本中提取版本号
+        if [ -z "$version" ]; then
+          version=$(grep -o '安桌[0-9.]*' pica.html | head -1 | sed 's/安桌//')
+          echo "方法3提取的版本号: $version"
+        fi
+        
+        # 如果仍然没有提取到版本号，使用默认值
+        if [ -z "$version" ]; then
+          version="unknown_$(date +%Y%m%d%H%M%S)"
+          echo "无法提取版本号，使用默认值: $version"
+        else
+          echo "最终提取的版本号: $version"
+        fi
+
+        # 去掉最后一个点号（如果有）
+        version_nodot=$(echo "$version" | sed 's/\.$//')
+        echo "去掉最后一个点后的版本号: $version_nodot"
+        
+        # 设置输出变量供后续步骤使用
+        echo "apk_link=$apk_link" >> $GITHUB_OUTPUT
+        echo "version=$version_nodot" >> $GITHUB_OUTPUT
+        
+    - name: Check if version is new
+      id: check_version
+      run: |
+        echo "当前提取的版本: ${{ steps.extract.outputs.version }}"
+        
+        # 检查APK_VERSION.txt是否存在
+        if [ -f "APK_VERSION.txt" ]; then
+          current_version=$(cat APK_VERSION.txt)
+          echo "APK_VERSION.txt中的当前版本: $current_version"
+          
+          # 比较版本
+          if [ "$current_version" = "${{ steps.extract.outputs.version }}" ]; then
+            echo "版本相同，无需更新"
+            echo "is_new=false" >> $GITHUB_OUTPUT
+          else
+            echo "发现新版本"
+            echo "is_new=true" >> $GITHUB_OUTPUT
+          fi
+        else
+          echo "APK_VERSION.txt不存在，将创建并发布新版本"
+          echo "is_new=true" >> $GITHUB_OUTPUT
+        fi
+        
+    - name: Download APK
+      if: steps.check_version.outputs.is_new == 'true'
+      run: |
+        echo "正在下载APK: ${{ steps.extract.outputs.apk_link }}"
+        curl -L -o "pica-${{ steps.extract.outputs.version }}.apk" "${{ steps.extract.outputs.apk_link }}"
+        echo "下载完成，文件信息:"
+        ls -la "pica-${{ steps.extract.outputs.version }}.apk"
+        
+    - name: Create Release
+      if: steps.check_version.outputs.is_new == 'true'
+      uses: softprops/action-gh-release@v1
+      with:
+        files: pica-${{ steps.extract.outputs.version }}.apk
+        tag_name: ${{ steps.extract.outputs.version }}
+        name: PicaComic v${{ steps.extract.outputs.version }}
+        body: |
+          自动发布的PicaComic APK
+          版本: ${{ steps.extract.outputs.version }}
+          发布时间: ${{ github.workflow_run.created_at }}
+          下载链接: ${{ steps.extract.outputs.apk_link }}
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        
+    - name: Update version file
+      if: steps.check_version.outputs.is_new == 'true'
+      run: |
+        echo "${{ steps.extract.outputs.version }}" > APK_VERSION.txt
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        git add APK_VERSION.txt
+        git commit -m "Update APK version to ${{ steps.extract.outputs.version }}"
+        git push
