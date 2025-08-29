@@ -131,9 +131,9 @@ jobs:
         tag_name: ${{ steps.extract.outputs.version }}
         name: PicaComic v${{ steps.extract.outputs.version }}
         body: |
-          自动发布的PicaComic APK <br>
-          版本: ${{ steps.extract.outputs.version }} <br>
-          下载链接: ${{ steps.extract.outputs.apk_link }}
+          PicaComic APK Auto Released<br>
+          Version: ${{ steps.extract.outputs.version }} <br>
+          Link: ${{ steps.extract.outputs.apk_link }}
         draft: false
         prerelease: false
       env:
